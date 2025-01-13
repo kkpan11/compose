@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/cli/cli/command"
 )
 
 var names = []string{
@@ -36,6 +36,18 @@ var names = []string{
 }
 
 const (
+	BOLD      = "1"
+	FAINT     = "2"
+	ITALIC    = "3"
+	UNDERLINE = "4"
+)
+
+const (
+	RESET = "0"
+	CYAN  = "36"
+)
+
+const (
 	// Never use ANSI codes
 	Never = "never"
 
@@ -47,15 +59,16 @@ const (
 )
 
 // SetANSIMode configure formatter for colored output on ANSI-compliant console
-func SetANSIMode(streams api.Streams, ansi string) {
+func SetANSIMode(streams command.Streams, ansi string) {
 	if !useAnsi(streams, ansi) {
 		nextColor = func() colorFunc {
 			return monochrome
 		}
+		disableAnsi = true
 	}
 }
 
-func useAnsi(streams api.Streams, ansi string) bool {
+func useAnsi(streams command.Streams, ansi string) bool {
 	switch ansi {
 	case Always:
 		return true
@@ -72,12 +85,17 @@ var monochrome = func(s string) string {
 	return s
 }
 
-func ansiColor(code, s string) string {
-	return fmt.Sprintf("%s%s%s", ansi(code), s, ansi("0"))
+func ansiColor(code, s string, formatOpts ...string) string {
+	return fmt.Sprintf("%s%s%s", ansiColorCode(code, formatOpts...), s, ansiColorCode("0"))
 }
 
-func ansi(code string) string {
-	return fmt.Sprintf("\033[%sm", code)
+// Everything about ansiColorCode color https://hyperskill.org/learn/step/18193
+func ansiColorCode(code string, formatOpts ...string) string {
+	res := "\033["
+	for _, c := range formatOpts {
+		res = fmt.Sprintf("%s%s;", res, c)
+	}
+	return fmt.Sprintf("%s%sm", res, code)
 }
 
 func makeColorFunc(code string) colorFunc {
@@ -86,10 +104,12 @@ func makeColorFunc(code string) colorFunc {
 	}
 }
 
-var nextColor = rainbowColor
-var rainbow []colorFunc
-var currentIndex = 0
-var mutex sync.Mutex
+var (
+	nextColor    = rainbowColor
+	rainbow      []colorFunc
+	currentIndex = 0
+	mutex        sync.Mutex
+)
 
 func rainbowColor() colorFunc {
 	mutex.Lock()

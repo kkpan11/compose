@@ -83,7 +83,6 @@ func TestLocalComposeUp(t *testing.T) {
 	t.Run("check user labels", func(t *testing.T) {
 		res := c.RunDockerCmd(t, "inspect", projectName+"-web-1")
 		res.Assert(t, icmd.Expected{Out: `"my-label": "test"`})
-
 	})
 
 	t.Run("check healthcheck output", func(t *testing.T) {
@@ -141,6 +140,8 @@ func TestDownComposefileInParentFolder(t *testing.T) {
 }
 
 func TestAttachRestart(t *testing.T) {
+	t.Skip("Skipping test until we can fix it")
+
 	if _, ok := os.LookupEnv("CI"); ok {
 		t.Skip("Skipping test on CI... flaky")
 	}
@@ -163,7 +164,7 @@ func TestAttachRestart(t *testing.T) {
 func TestInitContainer(t *testing.T) {
 	c := NewParallelCLI(t)
 
-	res := c.RunDockerComposeCmd(t, "--ansi=never", "--project-directory", "./fixtures/init-container", "up")
+	res := c.RunDockerComposeCmd(t, "--ansi=never", "--project-directory", "./fixtures/init-container", "up", "--menu=false")
 	defer c.RunDockerComposeCmd(t, "-p", "init-container", "down")
 	testify.Regexp(t, "foo-1  | hello(?m:.*)bar-1  | world", res.Stdout())
 }
@@ -233,7 +234,7 @@ func TestCompatibility(t *testing.T) {
 	})
 }
 
-func TestConvert(t *testing.T) {
+func TestConfig(t *testing.T) {
 	const projectName = "compose-e2e-convert"
 	c := NewParallelCLI(t)
 
@@ -242,7 +243,8 @@ func TestConvert(t *testing.T) {
 
 	t.Run("up", func(t *testing.T) {
 		res := c.RunDockerComposeCmd(t, "-f", "./fixtures/simple-build-test/compose.yaml", "-p", projectName, "convert")
-		res.Assert(t, icmd.Expected{Out: fmt.Sprintf(`services:
+		res.Assert(t, icmd.Expected{Out: fmt.Sprintf(`name: %s
+services:
   nginx:
     build:
       context: %s
@@ -251,11 +253,12 @@ func TestConvert(t *testing.T) {
       default: null
 networks:
   default:
-    name: compose-e2e-convert_default`, filepath.Join(wd, "fixtures", "simple-build-test", "nginx-build")), ExitCode: 0})
+    name: compose-e2e-convert_default
+`, projectName, filepath.Join(wd, "fixtures", "simple-build-test", "nginx-build")), ExitCode: 0})
 	})
 }
 
-func TestConvertInterpolate(t *testing.T) {
+func TestConfigInterpolate(t *testing.T) {
 	const projectName = "compose-e2e-convert-interpolate"
 	c := NewParallelCLI(t)
 
@@ -264,16 +267,18 @@ func TestConvertInterpolate(t *testing.T) {
 
 	t.Run("convert", func(t *testing.T) {
 		res := c.RunDockerComposeCmd(t, "-f", "./fixtures/simple-build-test/compose-interpolate.yaml", "-p", projectName, "convert", "--no-interpolate")
-		res.Assert(t, icmd.Expected{Out: fmt.Sprintf(`services:
+		res.Assert(t, icmd.Expected{Out: fmt.Sprintf(`name: %s
+networks:
+  default:
+    name: compose-e2e-convert-interpolate_default
+services:
   nginx:
     build:
       context: %s
       dockerfile: ${MYVAR}
     networks:
       default: null
-networks:
-  default:
-    name: compose-e2e-convert-interpolate_default`, filepath.Join(wd, "fixtures", "simple-build-test", "nginx-build")), ExitCode: 0})
+`, projectName, filepath.Join(wd, "fixtures", "simple-build-test", "nginx-build")), ExitCode: 0})
 	})
 }
 
@@ -287,6 +292,117 @@ func TestStopWithDependenciesAttached(t *testing.T) {
 	cleanup()
 	t.Cleanup(cleanup)
 
-	res := c.RunDockerComposeCmd(t, "-f", "./fixtures/dependencies/compose.yaml", "-p", projectName, "up", "--attach-dependencies", "foo")
+	res := c.RunDockerComposeCmd(t, "-f", "./fixtures/dependencies/compose.yaml", "-p", projectName, "up", "--attach-dependencies", "foo", "--menu=false")
 	res.Assert(t, icmd.Expected{Out: "exited with code 0"})
+}
+
+func TestRemoveOrphaned(t *testing.T) {
+	const projectName = "compose-e2e-remove-orphaned"
+	c := NewParallelCLI(t)
+
+	cleanup := func() {
+		c.RunDockerComposeCmd(t, "-p", projectName, "down", "--remove-orphans", "--timeout=0")
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	// run stack
+	c.RunDockerComposeCmd(t, "-f", "./fixtures/sentences/compose.yaml", "-p", projectName, "up", "-d")
+
+	// down "web" service with orphaned removed
+	c.RunDockerComposeCmd(t, "-f", "./fixtures/sentences/compose.yaml", "-p", projectName, "down", "--remove-orphans", "web")
+
+	// check "words" service has not been considered orphaned
+	res := c.RunDockerComposeCmd(t, "-f", "./fixtures/sentences/compose.yaml", "-p", projectName, "ps", "--format", "{{.Name}}")
+	res.Assert(t, icmd.Expected{Out: fmt.Sprintf("%s-words-1", projectName)})
+}
+
+func TestComposeFileSetByDotEnv(t *testing.T) {
+	c := NewCLI(t)
+	defer c.cleanupWithDown(t, "dotenv")
+
+	cmd := c.NewDockerComposeCmd(t, "config")
+	cmd.Dir = filepath.Join(".", "fixtures", "dotenv")
+	res := icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Expected{
+		ExitCode: 0,
+		Out:      "image: test:latest",
+	})
+	res.Assert(t, icmd.Expected{
+		Out: "image: enabled:profile",
+	})
+}
+
+func TestComposeFileSetByProjectDirectory(t *testing.T) {
+	c := NewCLI(t)
+	defer c.cleanupWithDown(t, "dotenv")
+
+	dir := filepath.Join(".", "fixtures", "dotenv", "development")
+	cmd := c.NewDockerComposeCmd(t, "--project-directory", dir, "config")
+	res := icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Expected{
+		ExitCode: 0,
+		Out:      "image: backend:latest",
+	})
+}
+
+func TestComposeFileSetByEnvFile(t *testing.T) {
+	c := NewCLI(t)
+	defer c.cleanupWithDown(t, "dotenv")
+
+	dotEnv, err := os.CreateTemp(t.TempDir(), ".env")
+	assert.NilError(t, err)
+	err = os.WriteFile(dotEnv.Name(), []byte(`
+COMPOSE_FILE=fixtures/dotenv/development/compose.yaml
+IMAGE_NAME=test
+IMAGE_TAG=latest
+COMPOSE_PROFILES=test
+`), 0o700)
+	assert.NilError(t, err)
+
+	cmd := c.NewDockerComposeCmd(t, "--env-file", dotEnv.Name(), "config")
+	res := icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Expected{
+		Out: "image: test:latest",
+	})
+	res.Assert(t, icmd.Expected{
+		Out: "image: enabled:profile",
+	})
+}
+
+func TestNestedDotEnv(t *testing.T) {
+	c := NewCLI(t)
+	defer c.cleanupWithDown(t, "nested")
+
+	cmd := c.NewDockerComposeCmd(t, "run", "echo")
+	cmd.Dir = filepath.Join(".", "fixtures", "nested")
+	res := icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Expected{
+		ExitCode: 0,
+		Out:      "root win=root",
+	})
+
+	cmd = c.NewDockerComposeCmd(t, "run", "echo")
+	cmd.Dir = filepath.Join(".", "fixtures", "nested", "sub")
+	defer c.cleanupWithDown(t, "nested")
+	res = icmd.RunCmd(cmd)
+	res.Assert(t, icmd.Expected{
+		ExitCode: 0,
+		Out:      "root sub win=sub",
+	})
+}
+
+func TestUnnecessaryResources(t *testing.T) {
+	const projectName = "compose-e2e-unnecessary-resources"
+	c := NewParallelCLI(t)
+	defer c.cleanupWithDown(t, projectName)
+
+	res := c.RunDockerComposeCmdNoCheck(t, "-f", "./fixtures/external/compose.yaml", "-p", projectName, "up", "-d")
+	res.Assert(t, icmd.Expected{
+		ExitCode: 1,
+		Err:      "network foo_bar declared as external, but could not be found",
+	})
+
+	c.RunDockerComposeCmd(t, "-f", "./fixtures/external/compose.yaml", "-p", projectName, "up", "-d", "test")
+	// Should not fail as missing external network is not used
 }

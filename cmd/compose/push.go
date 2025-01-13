@@ -19,7 +19,7 @@ package compose
 import (
 	"context"
 
-	"github.com/compose-spec/compose-go/types"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
 	"github.com/spf13/cobra"
 
@@ -54,13 +54,13 @@ func pushCommand(p *ProjectOptions, dockerCli command.Cli, backend api.Service) 
 }
 
 func runPush(ctx context.Context, dockerCli command.Cli, backend api.Service, opts pushOptions, services []string) error {
-	project, err := opts.ToProject(dockerCli, services)
+	project, _, err := opts.ToProject(ctx, dockerCli, services)
 	if err != nil {
 		return err
 	}
 
 	if !opts.IncludeDeps {
-		err := project.ForServices(services, types.IgnoreDependencies)
+		project, err = project.WithSelectedServices(services, types.IgnoreDependencies)
 		if err != nil {
 			return err
 		}

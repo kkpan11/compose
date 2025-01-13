@@ -65,10 +65,8 @@ func copyCommand(p *ProjectOptions, dockerCli command.Cli, backend api.Service) 
 	}
 
 	flags := copyCmd.Flags()
-	flags.IntVar(&opts.index, "index", 0, "index of the container if service has multiple replicas")
-	flags.BoolVar(&opts.all, "all", false, "copy to all the containers of the service.")
-	flags.MarkHidden("all")                                                                                                      //nolint:errcheck
-	flags.MarkDeprecated("all", "by default all the containers of the service will get the source file/directory to be copied.") //nolint:errcheck
+	flags.IntVar(&opts.index, "index", 0, "Index of the container if service has multiple replicas")
+	flags.BoolVar(&opts.all, "all", false, "Include containers created by the run command")
 	flags.BoolVarP(&opts.followLink, "follow-link", "L", false, "Always follow symbol link in SRC_PATH")
 	flags.BoolVarP(&opts.copyUIDGID, "archive", "a", false, "Archive mode (copy all uid/gid information)")
 
@@ -76,7 +74,7 @@ func copyCommand(p *ProjectOptions, dockerCli command.Cli, backend api.Service) 
 }
 
 func runCopy(ctx context.Context, dockerCli command.Cli, backend api.Service, opts copyOptions) error {
-	name, err := opts.toProjectName(dockerCli)
+	name, err := opts.toProjectName(ctx, dockerCli)
 	if err != nil {
 		return err
 	}

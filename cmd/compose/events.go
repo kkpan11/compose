@@ -40,7 +40,7 @@ func eventsCommand(p *ProjectOptions, dockerCli command.Cli, backend api.Service
 	}
 	cmd := &cobra.Command{
 		Use:   "events [OPTIONS] [SERVICE...]",
-		Short: "Receive real time events from containers.",
+		Short: "Receive real time events from containers",
 		RunE: Adapt(func(ctx context.Context, args []string) error {
 			return runEvents(ctx, dockerCli, backend, opts, args)
 		}),
@@ -52,7 +52,7 @@ func eventsCommand(p *ProjectOptions, dockerCli command.Cli, backend api.Service
 }
 
 func runEvents(ctx context.Context, dockerCli command.Cli, backend api.Service, opts eventsOpts, services []string) error {
-	name, err := opts.toProjectName(dockerCli)
+	name, err := opts.toProjectName(ctx, dockerCli)
 	if err != nil {
 		return err
 	}
@@ -72,9 +72,9 @@ func runEvents(ctx context.Context, dockerCli command.Cli, backend api.Service, 
 				if err != nil {
 					return err
 				}
-				fmt.Fprintln(dockerCli.Out(), string(marshal))
+				_, _ = fmt.Fprintln(dockerCli.Out(), string(marshal))
 			} else {
-				fmt.Fprintln(dockerCli.Out(), event)
+				_, _ = fmt.Fprintln(dockerCli.Out(), event)
 			}
 			return nil
 		},

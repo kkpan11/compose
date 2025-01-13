@@ -52,19 +52,19 @@ func versionCommand(dockerCli command.Cli) *cobra.Command {
 	// define flags for backward compatibility with com.docker.cli
 	flags := cmd.Flags()
 	flags.StringVarP(&opts.format, "format", "f", "", "Format the output. Values: [pretty | json]. (Default: pretty)")
-	flags.BoolVar(&opts.short, "short", false, "Shows only Compose's version number.")
+	flags.BoolVar(&opts.short, "short", false, "Shows only Compose's version number")
 
 	return cmd
 }
 
 func runVersion(opts versionOptions, dockerCli command.Cli) {
 	if opts.short {
-		fmt.Fprintln(dockerCli.Out(), strings.TrimPrefix(internal.Version, "v"))
+		_, _ = fmt.Fprintln(dockerCli.Out(), strings.TrimPrefix(internal.Version, "v"))
 		return
 	}
 	if opts.format == formatter.JSON {
-		fmt.Fprintf(dockerCli.Out(), "{\"version\":%q}\n", internal.Version)
+		_, _ = fmt.Fprintf(dockerCli.Out(), "{\"version\":%q}\n", internal.Version)
 		return
 	}
-	fmt.Fprintln(dockerCli.Out(), "Docker Compose version", internal.Version)
+	_, _ = fmt.Fprintln(dockerCli.Out(), "Docker Compose version", internal.Version)
 }

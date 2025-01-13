@@ -23,7 +23,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/compose-spec/compose-go/types"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/utils"
 	testify "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,20 +32,20 @@ import (
 
 func createTestProject() *types.Project {
 	return &types.Project{
-		Services: []types.ServiceConfig{
-			{
+		Services: types.Services{
+			"test1": {
 				Name: "test1",
 				DependsOn: map[string]types.ServiceDependency{
 					"test2": {},
 				},
 			},
-			{
+			"test2": {
 				Name: "test2",
 				DependsOn: map[string]types.ServiceDependency{
 					"test3": {},
 				},
 			},
-			{
+			"test3": {
 				Name: "test3",
 			},
 		},
@@ -59,7 +59,7 @@ func TestTraversalWithMultipleParents(t *testing.T) {
 	}
 
 	project := types.Project{
-		Services: []types.ServiceConfig{dependent},
+		Services: types.Services{"dependent": dependent},
 	}
 
 	for i := 1; i <= 100; i++ {
@@ -67,7 +67,7 @@ func TestTraversalWithMultipleParents(t *testing.T) {
 		dependent.DependsOn[name] = types.ServiceDependency{}
 
 		svc := types.ServiceConfig{Name: name}
-		project.Services = append(project.Services, svc)
+		project.Services[name] = svc
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -132,7 +132,7 @@ func TestBuildGraph(t *testing.T) {
 		{
 			desc: "builds graph with single service",
 			services: types.Services{
-				{
+				"test": {
 					Name:      "test",
 					DependsOn: types.DependsOnConfig{},
 				},
@@ -150,11 +150,11 @@ func TestBuildGraph(t *testing.T) {
 		{
 			desc: "builds graph with two separate services",
 			services: types.Services{
-				{
+				"test": {
 					Name:      "test",
 					DependsOn: types.DependsOnConfig{},
 				},
-				{
+				"another": {
 					Name:      "another",
 					DependsOn: types.DependsOnConfig{},
 				},
@@ -179,13 +179,13 @@ func TestBuildGraph(t *testing.T) {
 		{
 			desc: "builds graph with a service and a dependency",
 			services: types.Services{
-				{
+				"test": {
 					Name: "test",
 					DependsOn: types.DependsOnConfig{
 						"another": types.ServiceDependency{},
 					},
 				},
-				{
+				"another": {
 					Name:      "another",
 					DependsOn: types.DependsOnConfig{},
 				},
@@ -214,19 +214,19 @@ func TestBuildGraph(t *testing.T) {
 		{
 			desc: "builds graph with multiple dependency levels",
 			services: types.Services{
-				{
+				"test": {
 					Name: "test",
 					DependsOn: types.DependsOnConfig{
 						"another": types.ServiceDependency{},
 					},
 				},
-				{
+				"another": {
 					Name: "another",
 					DependsOn: types.DependsOnConfig{
 						"another_dep": types.ServiceDependency{},
 					},
 				},
-				{
+				"another_dep": {
 					Name:      "another_dep",
 					DependsOn: types.DependsOnConfig{},
 				},
@@ -260,6 +260,56 @@ func TestBuildGraph(t *testing.T) {
 					Parents: map[string]*Vertex{
 						"another": {},
 					},
+				},
+			},
+		},
+	}
+	for _, tC := range testCases {
+		t.Run(tC.desc, func(t *testing.T) {
+			project := types.Project{
+				Services: tC.services,
+			}
+
+			graph, err := NewGraph(&project, ServiceStopped)
+			assert.NilError(t, err, fmt.Sprintf("failed to build graph for: %s", tC.desc))
+
+			for k, vertex := range graph.Vertices {
+				expected, ok := tC.expectedVertices[k]
+				assert.Equal(t, true, ok)
+				assert.Equal(t, true, isVertexEqual(*expected, *vertex))
+			}
+		})
+	}
+}
+
+func TestBuildGraphDependsOn(t *testing.T) {
+	testCases := []struct {
+		desc             string
+		services         types.Services
+		expectedVertices map[string]*Vertex
+	}{
+		{
+			desc: "service depends on init container which is already removed",
+			services: types.Services{
+				"test": {
+					Name: "test",
+					DependsOn: types.DependsOnConfig{
+						"test-removed-init-container": types.ServiceDependency{
+							Condition:  "service_completed_successfully",
+							Restart:    false,
+							Extensions: types.Extensions(nil),
+							Required:   false,
+						},
+					},
+				},
+			},
+			expectedVertices: map[string]*Vertex{
+				"test": {
+					Key:      "test",
+					Service:  "test",
+					Status:   ServiceStopped,
+					Children: map[string]*Vertex{},
+					Parents:  map[string]*Vertex{},
 				},
 			},
 		},

@@ -25,11 +25,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/compose-spec/compose-go/loader"
+	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/distribution/reference"
 	"github.com/docker/buildx/store/storeutil"
 	"github.com/docker/buildx/util/imagetools"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/compose/v2/internal/ocipush"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -50,12 +51,14 @@ func NewOCIRemoteLoader(dockerCli command.Cli, offline bool) loader.ResourceLoad
 	return ociRemoteLoader{
 		dockerCli: dockerCli,
 		offline:   offline,
+		known:     map[string]string{},
 	}
 }
 
 type ociRemoteLoader struct {
 	dockerCli command.Cli
 	offline   bool
+	known     map[string]string
 }
 
 const prefix = "oci://"
@@ -77,42 +80,53 @@ func (g ociRemoteLoader) Load(ctx context.Context, path string) (string, error) 
 		return "", nil
 	}
 
-	ref, err := reference.ParseDockerRef(path[len(prefix):])
-	if err != nil {
-		return "", err
-	}
-
-	opt, err := storeutil.GetImageConfig(g.dockerCli, nil)
-	if err != nil {
-		return "", err
-	}
-	resolver := imagetools.New(opt)
-
-	content, descriptor, err := resolver.Get(ctx, ref.String())
-	if err != nil {
-		return "", err
-	}
-
-	cache, err := cacheDir()
-	if err != nil {
-		return "", fmt.Errorf("initializing remote resource cache: %w", err)
-	}
-
-	local := filepath.Join(cache, descriptor.Digest.Hex())
-	composeFile := filepath.Join(local, "compose.yaml")
-	if _, err = os.Stat(local); os.IsNotExist(err) {
-		var manifest v1.Manifest
-		err = json.Unmarshal(content, &manifest)
+	local, ok := g.known[path]
+	if !ok {
+		ref, err := reference.ParseDockerRef(path[len(prefix):])
 		if err != nil {
 			return "", err
 		}
 
-		err2 := g.pullComposeFiles(ctx, local, composeFile, manifest, ref, resolver)
-		if err2 != nil {
-			return "", err2
+		opt, err := storeutil.GetImageConfig(g.dockerCli, nil)
+		if err != nil {
+			return "", err
 		}
+		resolver := imagetools.New(opt)
+
+		content, descriptor, err := resolver.Get(ctx, ref.String())
+		if err != nil {
+			return "", err
+		}
+
+		cache, err := cacheDir()
+		if err != nil {
+			return "", fmt.Errorf("initializing remote resource cache: %w", err)
+		}
+
+		local = filepath.Join(cache, descriptor.Digest.Hex())
+		composeFile := filepath.Join(local, "compose.yaml")
+		if _, err = os.Stat(local); os.IsNotExist(err) {
+			var manifest v1.Manifest
+			err = json.Unmarshal(content, &manifest)
+			if err != nil {
+				return "", err
+			}
+
+			err2 := g.pullComposeFiles(ctx, local, composeFile, manifest, ref, resolver)
+			if err2 != nil {
+				// we need to clean up the directory to be sure we won't let empty files present
+				_ = os.RemoveAll(local)
+				return "", err2
+			}
+		}
+		g.known[path] = local
 	}
-	return composeFile, nil
+
+	return filepath.Join(local, "compose.yaml"), nil
+}
+
+func (g ociRemoteLoader) Dir(path string) string {
+	return g.known[path]
 }
 
 func (g ociRemoteLoader) pullComposeFiles(ctx context.Context, local string, composeFile string, manifest v1.Manifest, ref reference.Named, resolver *imagetools.Resolver) error {
@@ -126,8 +140,8 @@ func (g ociRemoteLoader) pullComposeFiles(ctx context.Context, local string, com
 		return err
 	}
 	defer f.Close() //nolint:errcheck
-
-	if manifest.ArtifactType != "application/vnd.docker.compose.project" {
+	if (manifest.ArtifactType != "" && manifest.ArtifactType != ocipush.ComposeProjectArtifactType) ||
+		(manifest.ArtifactType == "" && manifest.Config.MediaType != ocipush.ComposeEmptyConfigMediaType) {
 		return fmt.Errorf("%s is not a compose project OCI artifact, but %s", ref.String(), manifest.ArtifactType)
 	}
 

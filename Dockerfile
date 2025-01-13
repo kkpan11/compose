@@ -15,9 +15,9 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-ARG GO_VERSION=1.21.1
-ARG XX_VERSION=1.2.1
-ARG GOLANGCI_LINT_VERSION=v1.54.2
+ARG GO_VERSION=1.22.10
+ARG XX_VERSION=1.6.1
+ARG GOLANGCI_LINT_VERSION=v1.60.2
 ARG ADDLICENSE_VERSION=v1.0.0
 
 ARG BUILD_TAGS="e2e"
@@ -106,11 +106,14 @@ RUN --mount=type=bind,target=. \
     --mount=type=cache,target=/go/pkg/mod \
     rm -rf /tmp/coverage && \
     mkdir -p /tmp/coverage && \
-    go test -tags "$BUILD_TAGS" -v -cover -covermode=atomic $(go list  $(TAGS) ./... | grep -vE 'e2e') -args -test.gocoverdir="/tmp/coverage" && \
+    rm -rf /tmp/report && \
+    mkdir -p /tmp/report && \
+    go run gotest.tools/gotestsum@latest --format testname --junitfile "/tmp/report/report.xml" -- -tags "$BUILD_TAGS" -v -cover -covermode=atomic $(go list  $(TAGS) ./... | grep -vE 'e2e') -args -test.gocoverdir="/tmp/coverage" && \
     go tool covdata percent -i=/tmp/coverage
 
 FROM scratch AS test-coverage
 COPY --from=test --link /tmp/coverage /
+COPY --from=test --link /tmp/report /
 
 FROM base AS license-set
 ARG LICENSE_FILES

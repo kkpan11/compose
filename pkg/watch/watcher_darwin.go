@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"time"
 
+	pathutil "github.com/docker/compose/v2/internal/paths"
 	"github.com/fsnotify/fsevents"
 	"github.com/sirupsen/logrus"
 )
@@ -92,7 +93,7 @@ func (d *fseventNotify) Start() error {
 
 	numberOfWatches.Add(int64(len(d.stream.Paths)))
 
-	d.stream.Start()
+	d.stream.Start() //nolint:errcheck // FIXME(thaJeztah): should this return an error?
 
 	go d.loop()
 
@@ -132,7 +133,7 @@ func newWatcher(paths []string, ignore PathMatcher) (Notify, error) {
 		stop:   make(chan struct{}),
 	}
 
-	paths = dedupePathsForRecursiveWatcher(paths)
+	paths = pathutil.EncompassingPaths(paths)
 	for _, path := range paths {
 		path, err := filepath.Abs(path)
 		if err != nil {
