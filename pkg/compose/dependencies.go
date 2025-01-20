@@ -22,7 +22,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/compose-spec/compose-go/types"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/api"
 	"golang.org/x/sync/errgroup"
 
@@ -224,7 +224,7 @@ func getParents(v *Vertex) []*Vertex {
 	return v.GetParents()
 }
 
-// GetParents returns a slice with the parent vertices of the a Vertex
+// GetParents returns a slice with the parent vertices of the Vertex
 func (v *Vertex) GetParents() []*Vertex {
 	var res []*Vertex
 	for _, p := range v.Parents {
@@ -247,7 +247,7 @@ func getAncestors(v *Vertex) []*Vertex {
 	return descendents
 }
 
-// GetChildren returns a slice with the child vertices of the a Vertex
+// GetChildren returns a slice with the child vertices of the Vertex
 func (v *Vertex) GetChildren() []*Vertex {
 	var res []*Vertex
 	for _, p := range v.Children {
@@ -438,7 +438,6 @@ func (g *Graph) HasCycles() (bool, error) {
 		if !utils.StringContains(discovered, vertex.Key) && !utils.StringContains(finished, vertex.Key) {
 			var err error
 			discovered, finished, err = g.visit(vertex.Key, path, discovered, finished)
-
 			if err != nil {
 				return true, err
 			}

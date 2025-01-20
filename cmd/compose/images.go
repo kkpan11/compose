@@ -51,13 +51,13 @@ func imagesCommand(p *ProjectOptions, dockerCli command.Cli, backend api.Service
 		}),
 		ValidArgsFunction: completeServiceNames(dockerCli, p),
 	}
-	imgCmd.Flags().StringVar(&opts.Format, "format", "table", "Format the output. Values: [table | json].")
+	imgCmd.Flags().StringVar(&opts.Format, "format", "table", "Format the output. Values: [table | json]")
 	imgCmd.Flags().BoolVarP(&opts.Quiet, "quiet", "q", false, "Only display IDs")
 	return imgCmd
 }
 
 func runImages(ctx context.Context, dockerCli command.Cli, backend api.Service, opts imageOptions, services []string) error {
-	projectName, err := opts.toProjectName(dockerCli)
+	projectName, err := opts.toProjectName(ctx, dockerCli)
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func runImages(ctx context.Context, dockerCli command.Cli, backend api.Service, 
 			}
 		}
 		for _, img := range ids {
-			fmt.Fprintln(dockerCli.Out(), img)
+			_, _ = fmt.Fprintln(dockerCli.Out(), img)
 		}
 		return nil
 	}

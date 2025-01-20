@@ -17,13 +17,12 @@
 package tracing
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/context/store"
+	"github.com/docker/compose/v2/internal/memnet"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"google.golang.org/grpc"
@@ -62,12 +61,10 @@ func traceClientFromDockerContext(dockerCli command.Cli, otelEnv envMap) (otlptr
 		}
 	}
 
-	dialCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-	conn, err := grpc.DialContext(
-		dialCtx,
-		cfg.Endpoint,
-		grpc.WithContextDialer(DialInMemory),
+	conn, err := grpc.NewClient(cfg.Endpoint,
+		grpc.WithContextDialer(memnet.DialEndpoint),
+		// this dial is restricted to using a local Unix socket / named pipe,
+		// so there is no need for TLS
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {

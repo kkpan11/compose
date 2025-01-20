@@ -49,9 +49,9 @@ func listCommand(dockerCli command.Cli, backend api.Service) *cobra.Command {
 		Args:              cobra.NoArgs,
 		ValidArgsFunction: noCompletion(),
 	}
-	lsCmd.Flags().StringVar(&lsOpts.Format, "format", "table", "Format the output. Values: [table | json].")
-	lsCmd.Flags().BoolVarP(&lsOpts.Quiet, "quiet", "q", false, "Only display IDs.")
-	lsCmd.Flags().Var(&lsOpts.Filter, "filter", "Filter output based on conditions provided.")
+	lsCmd.Flags().StringVar(&lsOpts.Format, "format", "table", "Format the output. Values: [table | json]")
+	lsCmd.Flags().BoolVarP(&lsOpts.Quiet, "quiet", "q", false, "Only display IDs")
+	lsCmd.Flags().Var(&lsOpts.Filter, "filter", "Filter output based on conditions provided")
 	lsCmd.Flags().BoolVarP(&lsOpts.All, "all", "a", false, "Show all stopped Compose projects")
 
 	return lsCmd
@@ -72,12 +72,6 @@ func runList(ctx context.Context, dockerCli command.Cli, backend api.Service, ls
 	if err != nil {
 		return err
 	}
-	if lsOpts.Quiet {
-		for _, s := range stackList {
-			fmt.Fprintln(dockerCli.Out(), s.Name)
-		}
-		return nil
-	}
 
 	if filters.Len() > 0 {
 		var filtered []api.Stack
@@ -88,6 +82,13 @@ func runList(ctx context.Context, dockerCli command.Cli, backend api.Service, ls
 			filtered = append(filtered, s)
 		}
 		stackList = filtered
+	}
+
+	if lsOpts.Quiet {
+		for _, s := range stackList {
+			_, _ = fmt.Fprintln(dockerCli.Out(), s.Name)
+		}
+		return nil
 	}
 
 	view := viewFromStackList(stackList)

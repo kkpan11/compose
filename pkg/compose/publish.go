@@ -18,19 +18,14 @@ package compose
 
 import (
 	"context"
-	"encoding/json"
 	"os"
-	"path/filepath"
-	"time"
 
-	"github.com/compose-spec/compose-go/types"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/distribution/reference"
 	"github.com/docker/buildx/util/imagetools"
+	"github.com/docker/compose/v2/internal/ocipush"
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/compose/v2/pkg/progress"
-	"github.com/opencontainers/go-digest"
-	"github.com/opencontainers/image-spec/specs-go"
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 func (s *composeService) Publish(ctx context.Context, project *types.Project, repository string, options api.PublishOptions) error {
@@ -40,12 +35,10 @@ func (s *composeService) Publish(ctx context.Context, project *types.Project, re
 }
 
 func (s *composeService) publish(ctx context.Context, project *types.Project, repository string, options api.PublishOptions) error {
-	err := s.Push(ctx, project, api.PushOptions{})
+	err := s.Push(ctx, project, api.PushOptions{IgnoreFailures: true, ImageMandatory: true})
 	if err != nil {
 		return err
 	}
-
-	w := progress.ContextWriter(ctx)
 
 	named, err := reference.ParseDockerRef(repository)
 	if err != nil {
@@ -56,18 +49,18 @@ func (s *composeService) publish(ctx context.Context, project *types.Project, re
 		Auth: s.configFile(),
 	})
 
-	var layers []v1.Descriptor
+	var layers []ocipush.Pushable
 	for _, file := range project.ComposeFiles {
 		f, err := os.ReadFile(file)
 		if err != nil {
 			return err
 		}
 
-		layer, err := s.pushComposeFile(ctx, file, f, resolver, named)
-		if err != nil {
-			return err
-		}
-		layers = append(layers, layer)
+		layerDescriptor := ocipush.DescriptorForComposeFile(file, f)
+		layers = append(layers, ocipush.Pushable{
+			Descriptor: layerDescriptor,
+			Data:       f,
+		})
 	}
 
 	if options.ResolveImageDigests {
@@ -76,58 +69,21 @@ func (s *composeService) publish(ctx context.Context, project *types.Project, re
 			return err
 		}
 
-		layer, err := s.pushComposeFile(ctx, "image-digests.yaml", yaml, resolver, named)
-		if err != nil {
-			return err
-		}
-		layers = append(layers, layer)
-	}
-
-	emptyConfig, err := json.Marshal(v1.ImageConfig{})
-	if err != nil {
-		return err
-	}
-	configDescriptor := v1.Descriptor{
-		MediaType: "application/vnd.oci.empty.v1+json",
-		Digest:    digest.FromBytes(emptyConfig),
-		Size:      int64(len(emptyConfig)),
-	}
-	var imageManifest []byte
-	if !s.dryRun {
-		err = resolver.Push(ctx, named, configDescriptor, emptyConfig)
-		if err != nil {
-			return err
-		}
-		imageManifest, err = json.Marshal(v1.Manifest{
-			Versioned:    specs.Versioned{SchemaVersion: 2},
-			MediaType:    v1.MediaTypeImageManifest,
-			ArtifactType: "application/vnd.docker.compose.project",
-			Config:       configDescriptor,
-			Layers:       layers,
-			Annotations: map[string]string{
-				"org.opencontainers.image.created": time.Now().Format(time.RFC3339),
-			},
+		layerDescriptor := ocipush.DescriptorForComposeFile("image-digests.yaml", yaml)
+		layers = append(layers, ocipush.Pushable{
+			Descriptor: layerDescriptor,
+			Data:       yaml,
 		})
-		if err != nil {
-			return err
-		}
 	}
 
+	w := progress.ContextWriter(ctx)
 	w.Event(progress.Event{
 		ID:     repository,
 		Text:   "publishing",
 		Status: progress.Working,
 	})
 	if !s.dryRun {
-		err = resolver.Push(ctx, named, v1.Descriptor{
-			MediaType: v1.MediaTypeImageManifest,
-			Digest:    digest.FromString(string(imageManifest)),
-			Size:      int64(len(imageManifest)),
-			Annotations: map[string]string{
-				"com.docker.compose.version": api.ComposeVersion,
-			},
-			ArtifactType: "application/vnd.docker.compose.project",
-		}, imageManifest)
+		err = ocipush.PushManifest(ctx, resolver, named, layers, options.OCIVersion)
 		if err != nil {
 			w.Event(progress.Event{
 				ID:     repository,
@@ -146,59 +102,21 @@ func (s *composeService) publish(ctx context.Context, project *types.Project, re
 }
 
 func (s *composeService) generateImageDigestsOverride(ctx context.Context, project *types.Project) ([]byte, error) {
-	project.ApplyProfiles([]string{"*"})
-	err := project.ResolveImages(func(named reference.Named) (digest.Digest, error) {
-		auth, err := encodedAuth(named, s.configFile())
-		if err != nil {
-			return "", err
-		}
-		inspect, err := s.apiClient().DistributionInspect(ctx, named.String(), auth)
-		if err != nil {
-			return "", err
-		}
-		return inspect.Descriptor.Digest, nil
-	})
+	project, err := project.WithProfiles([]string{"*"})
 	if err != nil {
 		return nil, err
 	}
-	override := types.Project{}
-	for _, service := range project.Services {
-		override.Services = append(override.Services, types.ServiceConfig{
-			Name:  service.Name,
+	project, err = project.WithImagesResolved(ImageDigestResolver(ctx, s.configFile(), s.apiClient()))
+	if err != nil {
+		return nil, err
+	}
+	override := types.Project{
+		Services: types.Services{},
+	}
+	for name, service := range project.Services {
+		override.Services[name] = types.ServiceConfig{
 			Image: service.Image,
-		})
+		}
 	}
 	return override.MarshalYAML()
-}
-
-func (s *composeService) pushComposeFile(ctx context.Context, file string, content []byte, resolver *imagetools.Resolver, named reference.Named) (v1.Descriptor, error) {
-	w := progress.ContextWriter(ctx)
-	w.Event(progress.Event{
-		ID:     file,
-		Text:   "publishing",
-		Status: progress.Working,
-	})
-	layer := v1.Descriptor{
-		MediaType: "application/vnd.docker.compose.file+yaml",
-		Digest:    digest.FromString(string(content)),
-		Size:      int64(len(content)),
-		Annotations: map[string]string{
-			"com.docker.compose.version": api.ComposeVersion,
-			"com.docker.compose.file":    filepath.Base(file),
-		},
-	}
-	err := resolver.Push(ctx, named, layer, content)
-	w.Event(progress.Event{
-		ID:     file,
-		Text:   "published",
-		Status: statusFor(err),
-	})
-	return layer, err
-}
-
-func statusFor(err error) progress.EventStatus {
-	if err != nil {
-		return progress.Error
-	}
-	return progress.Done
 }

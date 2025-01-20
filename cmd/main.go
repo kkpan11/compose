@@ -24,31 +24,38 @@ import (
 	"github.com/docker/cli/cli-plugins/plugin"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/compose/v2/cmd/cmdtrace"
+	"github.com/docker/docker/client"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/docker/compose/v2/cmd/compatibility"
 	commands "github.com/docker/compose/v2/cmd/compose"
 	"github.com/docker/compose/v2/internal"
-	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/compose/v2/pkg/compose"
 )
 
 func pluginMain() {
 	plugin.Run(func(dockerCli command.Cli) *cobra.Command {
-		serviceProxy := api.NewServiceProxy().WithService(compose.NewComposeService(dockerCli))
-		cmd := commands.RootCommand(dockerCli, serviceProxy)
-		originalPreRun := cmd.PersistentPreRunE
+		// TODO(milas): this cast is safe but we should not need to do this,
+		// 	we should expose the concrete service type so that we do not need
+		// 	to rely on the `api.Service` interface internally
+		backend := compose.NewComposeService(dockerCli).(commands.Backend)
+		cmd := commands.RootCommand(dockerCli, backend)
+		originalPreRunE := cmd.PersistentPreRunE
 		cmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
 			// initialize the dockerCli instance
 			if err := plugin.PersistentPreRunE(cmd, args); err != nil {
 				return err
 			}
-			// TODO(milas): add an env var to enable logging from the
-			// OTel components for debugging purposes
-			_ = cmdtrace.Setup(cmd, dockerCli, os.Args[1:])
+			// compose-specific initialization
+			dockerCliPostInitialize(dockerCli)
 
-			if originalPreRun != nil {
-				return originalPreRun(cmd, args)
+			if err := cmdtrace.Setup(cmd, dockerCli, os.Args[1:]); err != nil {
+				logrus.Debugf("failed to enable tracing: %v", err)
+			}
+
+			if originalPreRunE != nil {
+				return originalPreRunE(cmd, args)
 			}
 			return nil
 		}
@@ -66,6 +73,22 @@ func pluginMain() {
 			Vendor:        "Docker Inc.",
 			Version:       internal.Version,
 		})
+}
+
+// dockerCliPostInitialize performs Compose-specific configuration for the
+// command.Cli instance provided by the plugin.Run() initialization.
+//
+// NOTE: This must be called AFTER plugin.PersistentPreRunE.
+func dockerCliPostInitialize(dockerCli command.Cli) {
+	// HACK(milas): remove once docker/cli#4574 is merged; for now,
+	// set it in a rather roundabout way by grabbing the underlying
+	// concrete client and manually invoking an option on it
+	_ = dockerCli.Apply(func(cli *command.DockerCli) error {
+		if mobyClient, ok := cli.Client().(*client.Client); ok {
+			_ = client.WithUserAgent("compose/" + internal.Version)(mobyClient)
+		}
+		return nil
+	})
 }
 
 func main() {

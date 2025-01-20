@@ -40,18 +40,21 @@ func TestScaleBasicCases(t *testing.T) {
 
 	t.Log("scale up one service")
 	res = c.RunDockerComposeCmd(t, "--project-directory", "fixtures/scale", "scale", "dbadmin=2")
-	checkServiceContainer(t, res.Combined(), "scale-basic-tests-dbadmin", "Started", 2)
+	out := res.Combined()
+	checkServiceContainer(t, out, "scale-basic-tests-dbadmin", "Started", 2)
 
 	t.Log("scale up 2 services")
 	res = c.RunDockerComposeCmd(t, "--project-directory", "fixtures/scale", "scale", "front=3", "back=2")
-	checkServiceContainer(t, res.Combined(), "scale-basic-tests-front", "Running", 2)
-	checkServiceContainer(t, res.Combined(), "scale-basic-tests-front", "Started", 1)
-	checkServiceContainer(t, res.Combined(), "scale-basic-tests-back", "Running", 1)
-	checkServiceContainer(t, res.Combined(), "scale-basic-tests-back", "Started", 1)
+	out = res.Combined()
+	checkServiceContainer(t, out, "scale-basic-tests-front", "Running", 2)
+	checkServiceContainer(t, out, "scale-basic-tests-front", "Started", 1)
+	checkServiceContainer(t, out, "scale-basic-tests-back", "Running", 1)
+	checkServiceContainer(t, out, "scale-basic-tests-back", "Started", 1)
 
 	t.Log("scale down one service")
 	res = c.RunDockerComposeCmd(t, "--project-directory", "fixtures/scale", "scale", "dbadmin=1")
-	checkServiceContainer(t, res.Combined(), "scale-basic-tests-dbadmin", "Running", 1)
+	out = res.Combined()
+	checkServiceContainer(t, out, "scale-basic-tests-dbadmin", "Running", 1)
 
 	t.Log("scale to 0 a service")
 	res = c.RunDockerComposeCmd(t, "--project-directory", "fixtures/scale", "scale", "dbadmin=0")
@@ -59,9 +62,10 @@ func TestScaleBasicCases(t *testing.T) {
 
 	t.Log("scale down 2 services")
 	res = c.RunDockerComposeCmd(t, "--project-directory", "fixtures/scale", "scale", "front=2", "back=1")
-	checkServiceContainer(t, res.Combined(), "scale-basic-tests-front", "Running", 2)
-	assert.Check(t, !strings.Contains(res.Combined(), "Container scale-basic-tests-front-3  Running"), res.Combined())
-	checkServiceContainer(t, res.Combined(), "scale-basic-tests-back", "Running", 1)
+	out = res.Combined()
+	checkServiceContainer(t, out, "scale-basic-tests-front", "Running", 2)
+	assert.Check(t, !strings.Contains(out, "Container scale-basic-tests-front-3  Running"), res.Combined())
+	checkServiceContainer(t, out, "scale-basic-tests-back", "Running", 1)
 }
 
 func TestScaleWithDepsCases(t *testing.T) {
@@ -91,6 +95,78 @@ func TestScaleWithDepsCases(t *testing.T) {
 	checkServiceContainer(t, res.Combined(), "scale-deps-tests-db", NO_STATE_TO_CHECK, 1)
 }
 
+func TestScaleUpAndDownPreserveContainerNumber(t *testing.T) {
+	const projectName = "scale-up-down-test"
+
+	c := NewCLI(t, WithEnv(
+		"COMPOSE_PROJECT_NAME="+projectName))
+
+	reset := func() {
+		c.RunDockerComposeCmd(t, "down", "--rmi", "all")
+	}
+	t.Cleanup(reset)
+	res := c.RunDockerComposeCmd(t, "--project-directory", "fixtures/scale", "up", "-d", "--scale", "db=2", "db")
+	res.Assert(t, icmd.Success)
+
+	res = c.RunDockerComposeCmd(t, "ps", "--format", "{{.Name}}", "db")
+	res.Assert(t, icmd.Success)
+	assert.Equal(t, strings.TrimSpace(res.Stdout()), projectName+"-db-1\n"+projectName+"-db-2")
+
+	t.Log("scale down removes replica #2")
+	res = c.RunDockerComposeCmd(t, "--project-directory", "fixtures/scale", "up", "-d", "--scale", "db=1", "db")
+	res.Assert(t, icmd.Success)
+
+	res = c.RunDockerComposeCmd(t, "ps", "--format", "{{.Name}}", "db")
+	res.Assert(t, icmd.Success)
+	assert.Equal(t, strings.TrimSpace(res.Stdout()), projectName+"-db-1")
+
+	t.Log("scale up restores replica #2")
+	res = c.RunDockerComposeCmd(t, "--project-directory", "fixtures/scale", "up", "-d", "--scale", "db=2", "db")
+	res.Assert(t, icmd.Success)
+
+	res = c.RunDockerComposeCmd(t, "ps", "--format", "{{.Name}}", "db")
+	res.Assert(t, icmd.Success)
+	assert.Equal(t, strings.TrimSpace(res.Stdout()), projectName+"-db-1\n"+projectName+"-db-2")
+}
+
+func TestScaleDownRemovesObsolete(t *testing.T) {
+	const projectName = "scale-down-obsolete-test"
+	c := NewCLI(t, WithEnv(
+		"COMPOSE_PROJECT_NAME="+projectName))
+
+	reset := func() {
+		c.RunDockerComposeCmd(t, "down", "--rmi", "all")
+	}
+	t.Cleanup(reset)
+	res := c.RunDockerComposeCmd(t, "--project-directory", "fixtures/scale", "up", "-d", "db")
+	res.Assert(t, icmd.Success)
+
+	res = c.RunDockerComposeCmd(t, "ps", "--format", "{{.Name}}", "db")
+	res.Assert(t, icmd.Success)
+	assert.Equal(t, strings.TrimSpace(res.Stdout()), projectName+"-db-1")
+
+	cmd := c.NewDockerComposeCmd(t, "--project-directory", "fixtures/scale", "up", "-d", "--scale", "db=2", "db")
+	res = icmd.RunCmd(cmd, func(cmd *icmd.Cmd) {
+		cmd.Env = append(cmd.Env, "MAYBE=value")
+	})
+	res.Assert(t, icmd.Success)
+
+	res = c.RunDockerComposeCmd(t, "ps", "--format", "{{.Name}}", "db")
+	res.Assert(t, icmd.Success)
+	assert.Equal(t, strings.TrimSpace(res.Stdout()), projectName+"-db-1\n"+projectName+"-db-2")
+
+	t.Log("scale down removes obsolete replica #1")
+	cmd = c.NewDockerComposeCmd(t, "--project-directory", "fixtures/scale", "up", "-d", "--scale", "db=1", "db")
+	res = icmd.RunCmd(cmd, func(cmd *icmd.Cmd) {
+		cmd.Env = append(cmd.Env, "MAYBE=value")
+	})
+	res.Assert(t, icmd.Success)
+
+	res = c.RunDockerComposeCmd(t, "ps", "--format", "{{.Name}}", "db")
+	res.Assert(t, icmd.Success)
+	assert.Equal(t, strings.TrimSpace(res.Stdout()), projectName+"-db-1")
+}
+
 func checkServiceContainer(t *testing.T, stdout, containerName, containerState string, count int) {
 	found := 0
 	lines := strings.Split(stdout, "\n")
@@ -107,4 +183,35 @@ func checkServiceContainer(t *testing.T, stdout, containerName, containerState s
 		errMessage += fmt.Sprintf(" with expected state %s", containerState)
 	}
 	testify.Fail(t, errMessage, stdout)
+}
+
+func TestScaleDownNoRecreate(t *testing.T) {
+	const projectName = "scale-down-recreated-test"
+	c := NewCLI(t, WithEnv(
+		"COMPOSE_PROJECT_NAME="+projectName))
+
+	reset := func() {
+		c.RunDockerComposeCmd(t, "down", "--rmi", "all")
+	}
+	t.Cleanup(reset)
+	c.RunDockerComposeCmd(t, "-f", "fixtures/scale/build.yaml", "build", "--build-arg", "FOO=test")
+	c.RunDockerComposeCmd(t, "-f", "fixtures/scale/build.yaml", "up", "-d", "--scale", "test=2")
+
+	c.RunDockerComposeCmd(t, "-f", "fixtures/scale/build.yaml", "build", "--build-arg", "FOO=updated")
+	c.RunDockerComposeCmd(t, "-f", "fixtures/scale/build.yaml", "up", "-d", "--scale", "test=4", "--no-recreate")
+
+	res := c.RunDockerComposeCmd(t, "ps", "--format", "{{.Name}}", "test")
+	res.Assert(t, icmd.Success)
+	assert.Check(t, strings.Contains(res.Stdout(), "scale-down-recreated-test-test-1"))
+	assert.Check(t, strings.Contains(res.Stdout(), "scale-down-recreated-test-test-2"))
+	assert.Check(t, strings.Contains(res.Stdout(), "scale-down-recreated-test-test-3"))
+	assert.Check(t, strings.Contains(res.Stdout(), "scale-down-recreated-test-test-4"))
+
+	t.Log("scale down removes obsolete replica #1 and #2")
+	c.NewDockerComposeCmd(t, "--project-directory", "fixtures/scale", "up", "-d", "--scale", "test=2")
+
+	res = c.RunDockerComposeCmd(t, "ps", "--format", "{{.Name}}", "test")
+	res.Assert(t, icmd.Success)
+	assert.Check(t, strings.Contains(res.Stdout(), "scale-down-recreated-test-test-3"))
+	assert.Check(t, strings.Contains(res.Stdout(), "scale-down-recreated-test-test-4"))
 }

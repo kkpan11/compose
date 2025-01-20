@@ -16,19 +16,25 @@ package compose
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/compose-spec/compose-go/types"
+	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/docker/cli/cli/streams"
 	"github.com/docker/compose/v2/internal/sync"
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/compose/v2/pkg/mocks"
 	"github.com/docker/compose/v2/pkg/watch"
 	moby "github.com/docker/docker/api/types"
-	"github.com/golang/mock/gomock"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"gotest.tools/v3/assert"
 )
 
@@ -38,23 +44,32 @@ func TestDebounceBatching(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	t.Cleanup(stop)
 
+	trigger := types.Trigger{
+		Path: "/",
+	}
+	matcher := watch.EmptyMatcher{}
 	eventBatchCh := batchDebounceEvents(ctx, clock, quietPeriod, ch)
 	for i := 0; i < 100; i++ {
-		var action types.WatchAction = "a"
+		path := "/a"
 		if i%2 == 0 {
-			action = "b"
+			path = "/b"
 		}
-		ch <- fileEvent{Action: action}
+
+		event := maybeFileEvent(trigger, path, matcher)
+		require.NotNil(t, event)
+		ch <- *event
 	}
 	// we sent 100 events + the debouncer
 	clock.BlockUntil(101)
 	clock.Advance(quietPeriod)
 	select {
 	case batch := <-eventBatchCh:
-		require.ElementsMatch(t, batch, []fileEvent{
-			{Action: "a"},
-			{Action: "b"},
+		slices.SortFunc(batch, func(a, b fileEvent) int {
+			return strings.Compare(a.HostPath, b.HostPath)
 		})
+		assert.Equal(t, len(batch), 2)
+		assert.Equal(t, batch[0].HostPath, "/a")
+		assert.Equal(t, batch[1].HostPath, "/b")
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("timed out waiting for events")
 	}
@@ -91,22 +106,53 @@ func (t testWatcher) Errors() chan error {
 	return t.errors
 }
 
+type stdLogger struct{}
+
+func (s stdLogger) Log(containerName, message string) {
+	fmt.Printf("%s: %s\n", containerName, message)
+}
+
+func (s stdLogger) Err(containerName, message string) {
+	fmt.Fprintf(os.Stderr, "%s: %s\n", containerName, message)
+}
+
+func (s stdLogger) Status(container, msg string) {
+	fmt.Printf("%s: %s\n", container, msg)
+}
+
+func (s stdLogger) Register(container string) {
+}
+
 func TestWatch_Sync(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	cli := mocks.NewMockCli(mockCtrl)
-	cli.EXPECT().Err().Return(os.Stderr).AnyTimes()
+	cli.EXPECT().Err().Return(streams.NewOut(os.Stderr)).AnyTimes()
 	apiClient := mocks.NewMockAPIClient(mockCtrl)
 	apiClient.EXPECT().ContainerList(gomock.Any(), gomock.Any()).Return([]moby.Container{
 		testContainer("test", "123", false),
 	}, nil).AnyTimes()
+	// we expect the image to be pruned
+	apiClient.EXPECT().ImageList(gomock.Any(), image.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("dangling", "true"),
+			filters.Arg("label", api.ProjectLabel+"=myProjectName"),
+		),
+	}).Return([]image.Summary{
+		{ID: "123"},
+		{ID: "456"},
+	}, nil).Times(1)
+	apiClient.EXPECT().ImageRemove(gomock.Any(), "123", image.RemoveOptions{}).Times(1)
+	apiClient.EXPECT().ImageRemove(gomock.Any(), "456", image.RemoveOptions{}).Times(1)
+	//
 	cli.EXPECT().Client().Return(apiClient).AnyTimes()
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	t.Cleanup(cancelFunc)
 
 	proj := types.Project{
-		Services: []types.ServiceConfig{
-			{
+		Name: "myProjectName",
+		Services: types.Services{
+			"test": {
 				Name: "test",
 			},
 		},
@@ -124,7 +170,11 @@ func TestWatch_Sync(t *testing.T) {
 			dockerCli: cli,
 			clock:     clock,
 		}
-		err := service.watch(ctx, &proj, "test", api.WatchOptions{}, watcher, syncer, []types.Trigger{
+		err := service.watchEvents(ctx, &proj, "test", api.WatchOptions{
+			Build: &api.BuildOptions{},
+			LogTo: stdLogger{},
+			Prune: true,
+		}, watcher, syncer, []types.Trigger{
 			{
 				Path:   "/sync",
 				Action: "sync",

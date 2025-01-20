@@ -23,8 +23,8 @@
 
 		people = [
 			"glours",
+			"jhrotko",
 			"milas",
-			"laurazard",
 			"ndeloof",
 			"nicksieger",
 			"StefanScherer",
@@ -39,6 +39,7 @@
 			"aiordache",
 			"chris-crone",
 			"gtardif",
+			"laurazard",
 			"maxcleme",
 			"rumpl",
 			"thaJeztah"
@@ -71,6 +72,11 @@
 	Name = "Guillaume Tardif"
 	Email = "guillaume.tardif@docker.com"
 	GitHub = "gtardif"
+
+	[people.jhrotko]
+	Name = "Joana Hrotko"
+	Email = "joana.hrotko@docker.com"
+	Github = "jhrotko"
 
 	[people.laurazard]
 	Name = "Laura Brehm"

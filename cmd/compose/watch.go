@@ -20,6 +20,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/docker/compose/v2/cmd/formatter"
+
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/compose/v2/internal/locker"
 	"github.com/docker/compose/v2/pkg/api"
@@ -29,7 +32,7 @@ import (
 
 type watchOptions struct {
 	*ProjectOptions
-	quiet bool
+	prune bool
 	noUp  bool
 }
 
@@ -55,13 +58,14 @@ func watchCommand(p *ProjectOptions, dockerCli command.Cli, backend api.Service)
 		ValidArgsFunction: completeServiceNames(dockerCli, p),
 	}
 
-	cmd.Flags().BoolVar(&watchOpts.quiet, "quiet", false, "hide build output")
+	cmd.Flags().BoolVar(&buildOpts.quiet, "quiet", false, "hide build output")
+	cmd.Flags().BoolVar(&watchOpts.prune, "prune", false, "Prune dangling images on rebuild")
 	cmd.Flags().BoolVar(&watchOpts.noUp, "no-up", false, "Do not build & start services before watching")
 	return cmd
 }
 
 func runWatch(ctx context.Context, dockerCli command.Cli, backend api.Service, watchOpts watchOptions, buildOpts buildOptions, services []string) error {
-	project, err := watchOpts.ToProject(dockerCli, nil)
+	project, _, err := watchOpts.ToProject(ctx, dockerCli, nil)
 	if err != nil {
 		return err
 	}
@@ -85,6 +89,12 @@ func runWatch(ctx context.Context, dockerCli command.Cli, backend api.Service, w
 	}
 
 	if !watchOpts.noUp {
+		for index, service := range project.Services {
+			if service.Build != nil && service.Develop != nil {
+				service.PullPolicy = types.PullPolicyBuild
+			}
+			project.Services[index] = service
+		}
 		upOpts := api.UpOptions{
 			Create: api.CreateOptions{
 				Build:                &build,
@@ -93,20 +103,23 @@ func runWatch(ctx context.Context, dockerCli command.Cli, backend api.Service, w
 				Recreate:             api.RecreateDiverged,
 				RecreateDependencies: api.RecreateNever,
 				Inherit:              true,
-				QuietPull:            watchOpts.quiet,
+				QuietPull:            buildOpts.quiet,
 			},
 			Start: api.StartOptions{
-				Project:     project,
-				Attach:      nil,
-				CascadeStop: false,
-				Services:    services,
+				Project:  project,
+				Attach:   nil,
+				Services: services,
 			},
 		}
 		if err := backend.Up(ctx, project, upOpts); err != nil {
 			return err
 		}
 	}
+
+	consumer := formatter.NewLogConsumer(ctx, dockerCli.Out(), dockerCli.Err(), false, false, false)
 	return backend.Watch(ctx, project, services, api.WatchOptions{
-		Build: build,
+		Build: &build,
+		LogTo: consumer,
+		Prune: watchOpts.prune,
 	})
 }

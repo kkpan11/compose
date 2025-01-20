@@ -66,6 +66,11 @@ When sending lengthy log files, consider posting them as a gist
 Don't forget to remove sensitive data from your log files before posting (you
 can replace those parts with "REDACTED").
 
+_Note:_ 
+Maintainers might request additional information to diagnose an issue,
+if initial reporter doesn't answer within a reasonable delay (a few weeks),
+issue will be closed.
+
 ## Quick contribution tips and guidelines
 
 This section gives the experienced contributor some tips and guidelines.
@@ -80,8 +85,7 @@ before anybody starts working on it.
 
 We are always thrilled to receive pull requests. We do our best to process them
 quickly. If your pull request is not accepted on the first try,
-don't get discouraged! Our contributor's guide explains
-[the review process we use for simple changes](https://docs.docker.com/opensource/workflow/make-a-contribution/).
+don't get discouraged!
 
 ### Talking to other Docker users and contributors
 

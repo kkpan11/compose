@@ -24,9 +24,11 @@ import (
 	"testing"
 
 	moby "github.com/docker/docker/api/types"
+	containerType "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
-	"github.com/golang/mock/gomock"
+	"go.uber.org/mock/gomock"
 	"gotest.tools/v3/assert"
 
 	compose "github.com/docker/compose/v2/pkg/api"
@@ -46,7 +48,7 @@ func TestKillAll(t *testing.T) {
 	name := strings.ToLower(testProject)
 
 	ctx := context.Background()
-	api.EXPECT().ContainerList(ctx, moby.ContainerListOptions{
+	api.EXPECT().ContainerList(ctx, containerType.ListOptions{
 		Filters: filters.NewArgs(projectFilter(name), hasConfigHashLabel()),
 	}).Return(
 		[]moby.Container{testContainer("service1", "123", false), testContainer("service1", "456", false), testContainer("service2", "789", false)}, nil)
@@ -56,8 +58,8 @@ func TestKillAll(t *testing.T) {
 			Filters: filters.NewArgs(projectFilter(strings.ToLower(testProject))),
 		}).
 		Return(volume.ListResponse{}, nil)
-	api.EXPECT().NetworkList(gomock.Any(), moby.NetworkListOptions{Filters: filters.NewArgs(projectFilter(strings.ToLower(testProject)))}).
-		Return([]moby.NetworkResource{
+	api.EXPECT().NetworkList(gomock.Any(), network.ListOptions{Filters: filters.NewArgs(projectFilter(strings.ToLower(testProject)))}).
+		Return([]network.Summary{
 			{ID: "abc123", Name: "testProject_default"},
 		}, nil)
 	api.EXPECT().ContainerKill(anyCancellableContext(), "123", "").Return(nil)
@@ -79,7 +81,7 @@ func TestKillSignal(t *testing.T) {
 	}
 
 	name := strings.ToLower(testProject)
-	listOptions := moby.ContainerListOptions{
+	listOptions := containerType.ListOptions{
 		Filters: filters.NewArgs(projectFilter(name), serviceFilter(serviceName), hasConfigHashLabel()),
 	}
 
@@ -91,8 +93,8 @@ func TestKillSignal(t *testing.T) {
 			Filters: filters.NewArgs(projectFilter(strings.ToLower(testProject))),
 		}).
 		Return(volume.ListResponse{}, nil)
-	api.EXPECT().NetworkList(gomock.Any(), moby.NetworkListOptions{Filters: filters.NewArgs(projectFilter(strings.ToLower(testProject)))}).
-		Return([]moby.NetworkResource{
+	api.EXPECT().NetworkList(gomock.Any(), network.ListOptions{Filters: filters.NewArgs(projectFilter(strings.ToLower(testProject)))}).
+		Return([]network.Summary{
 			{ID: "abc123", Name: "testProject_default"},
 		}, nil)
 	api.EXPECT().ContainerKill(anyCancellableContext(), "123", "SIGTERM").Return(nil)
@@ -110,17 +112,19 @@ func testContainer(service string, id string, oneOff bool) moby.Container {
 		ID:     id,
 		Names:  []string{name},
 		Labels: containerLabels(service, oneOff),
+		State:  ContainerExited,
 	}
 }
 
 func containerLabels(service string, oneOff bool) map[string]string {
-	workingdir, _ := filepath.Abs("testdata")
+	workingdir := "/src/pkg/compose/testdata"
 	composefile := filepath.Join(workingdir, "compose.yaml")
 	labels := map[string]string{
 		compose.ServiceLabel:     service,
 		compose.ConfigFilesLabel: composefile,
 		compose.WorkingDirLabel:  workingdir,
-		compose.ProjectLabel:     strings.ToLower(testProject)}
+		compose.ProjectLabel:     strings.ToLower(testProject),
+	}
 	if oneOff {
 		labels[compose.OneoffLabel] = "True"
 	}
@@ -133,7 +137,7 @@ func anyCancellableContext() gomock.Matcher {
 	return gomock.AssignableToTypeOf(ctxWithCancel)
 }
 
-func projectFilterListOpt(withOneOff bool) moby.ContainerListOptions {
+func projectFilterListOpt(withOneOff bool) containerType.ListOptions {
 	filter := filters.NewArgs(
 		projectFilter(strings.ToLower(testProject)),
 		hasConfigHashLabel(),
@@ -141,7 +145,7 @@ func projectFilterListOpt(withOneOff bool) moby.ContainerListOptions {
 	if !withOneOff {
 		filter.Add("label", fmt.Sprintf("%s=False", compose.OneoffLabel))
 	}
-	return moby.ContainerListOptions{
+	return containerType.ListOptions{
 		Filters: filter,
 		All:     true,
 	}
